@@ -1,0 +1,661 @@
+-- =====================================================================
+-- KUSMAN_V1 :: SAN DIEGO CHEAT ENGINE - FIXED VERSION 1.3
+-- ИСПРАВЛЕНИЯ: гарантированное отображение GUI, 
+--              работа во всех экзекьюторах, отладка
+-- =====================================================================
+
+-- [1] ГЛОБАЛЬНЫЕ СЕРВИСЫ И ПЕРЕМЕННЫЕ
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+local mouse = LocalPlayer:GetMouse()
+
+-- [2] КОНФИГУРАЦИЯ
+local Config = {
+    Speed = 50,
+    AimFOV = 150,
+    AimSpeed = 0.3,
+    AimPart = "Head",
+    SilentAimEnabled = true,
+    BindKey = Enum.KeyCode.MouseButton2,
+    TeamCheck = true,
+    GuiToggleKey = Enum.KeyCode.J,
+}
+
+-- [3] СОСТОЯНИЯ
+local aimTarget = nil
+local isAiming = false
+local fovCircle = nil
+local mainGui = nil
+local guiVisible = false
+local guiTween = nil
+
+-- =====================================================================
+-- [4] ОТЛАДОЧНАЯ СИСТЕМА (вывод в консоль экзекьютора)
+-- =====================================================================
+local function DebugPrint(msg)
+    print("[KUSMAN DEBUG] " .. tostring(msg))
+end
+
+DebugPrint("Script started...")
+
+-- =====================================================================
+-- [5] СКОРОСТНОЙ CFrame
+-- =====================================================================
+local function SpeedCFrame()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local root = char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart
+    if not root then return end
+    
+    local forward = Camera.CFrame.LookVector * Vector3.new(1, 0, 1)
+    if forward.Magnitude < 0.001 then return end
+    forward = forward.Unit
+    
+    local newPos = root.Position + forward * Config.Speed
+    root.CFrame = CFrame.new(newPos) * CFrame.Angles(0, math.rad(root.Orientation.Y), 0)
+end
+
+-- =====================================================================
+-- [6] ПОИСК ЦЕЛИ
+-- =====================================================================
+local function GetTarget()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    local rootPart = char:FindFirstChild("HumanoidRootPart")
+    if not rootPart then return nil end
+    
+    local viewportSize = Camera.ViewportSize
+    local centerX, centerY = viewportSize.X / 2, viewportSize.Y / 2
+    
+    local bestTarget = nil
+    local bestDist = math.huge
+    
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if Config.TeamCheck and player.Team == LocalPlayer.Team then continue end
+        
+        local targetChar = player.Character
+        if not targetChar then continue end
+        
+        local targetPart = targetChar:FindFirstChild(Config.AimPart)
+        if not targetPart then 
+            targetPart = targetChar:FindFirstChild("HumanoidRootPart")
+            if not targetPart then continue end
+        end
+        
+        local screenPoint, onScreen = Camera:WorldToScreenPoint(targetPart.Position)
+        if not onScreen then continue end
+        
+        local dx = screenPoint.X - centerX
+        local dy = screenPoint.Y - centerY
+        local dist = math.sqrt(dx*dx + dy*dy)
+        
+        if dist <= Config.AimFOV and dist < bestDist then
+            bestDist = dist
+            bestTarget = {
+                Player = player,
+                Part = targetPart,
+                ScreenPos = Vector2.new(screenPoint.X, screenPoint.Y),
+                Distance = dist
+            }
+        end
+    end
+    
+    return bestTarget
+end
+
+-- =====================================================================
+-- [7] SILENT AIM
+-- =====================================================================
+local function SilentAimStep()
+    if not Config.SilentAimEnabled then return end
+    if not isAiming then 
+        aimTarget = nil 
+        return 
+    end
+    
+    local targetData = GetTarget()
+    if not targetData then
+        aimTarget = nil
+        return
+    end
+    
+    aimTarget = targetData.Part
+    
+    local currentCF = Camera.CFrame
+    local targetPos = aimTarget.Position
+    local lookAtCF = CFrame.lookAt(currentCF.Position, targetPos)
+    local newCF = currentCF:Lerp(lookAtCF, Config.AimSpeed)
+    Camera.CFrame = newCF
+end
+
+-- =====================================================================
+-- [8] БИНДЫ КНОПОК
+-- =====================================================================
+UserInputService.InputBegan:Connect(function(input, isTyping)
+    if isTyping then return end
+    if input.KeyCode == Config.BindKey then
+        isAiming = true
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input, isTyping)
+    if isTyping then return end
+    if input.KeyCode == Config.BindKey then
+        isAiming = false
+        aimTarget = nil
+    end
+end)
+
+UserInputService.InputBegan:Connect(function(input, isTyping)
+    if isTyping then return end
+    if input.KeyCode == Enum.KeyCode.Q then
+        SpeedCFrame()
+    end
+end)
+
+-- =====================================================================
+-- [9] TOGGLE GUI С АНИМАЦИЕЙ (ИСПРАВЛЕНО)
+-- =====================================================================
+local function ToggleGUI()
+    DebugPrint("ToggleGUI called")
+    
+    if not mainGui then
+        DebugPrint("mainGui is nil! Attempting to recreate...")
+        SetupGUI()
+        if not mainGui then
+            DebugPrint("Failed to create GUI!")
+            return
+        end
+    end
+    
+    local frame = mainGui:FindFirstChild("MainFrame")
+    if not frame then
+        DebugPrint("MainFrame not found in mainGui!")
+        return
+    end
+    
+    if guiTween and guiTween.PlaybackState == Enum.PlaybackState.Playing then
+        guiTween:Cancel()
+    end
+    
+    guiVisible = not guiVisible
+    DebugPrint("GUI visible: " .. tostring(guiVisible))
+    
+    local targetProperties = {}
+    local tweenInfo = TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    
+    if guiVisible then
+        targetProperties = {
+            BackgroundTransparency = 0.12,
+            Size = UDim2.new(0, 340, 0, 460)
+        }
+        for _, child in ipairs(frame:GetChildren()) do
+            if child:IsA("GuiObject") and child ~= frame then
+                pcall(function()
+                    local childTween = TweenService:Create(child, tweenInfo, {
+                        BackgroundTransparency = 0,
+                        TextTransparency = 0,
+                        ImageTransparency = 0
+                    })
+                    childTween:Play()
+                end)
+            end
+        end
+        if fovCircle then
+            pcall(function()
+                fovCircle.ImageTransparency = 0.55
+                fovCircle.Visible = true
+            end)
+        end
+    else
+        targetProperties = {
+            BackgroundTransparency = 0.9,
+            Size = UDim2.new(0, 50, 0, 50)
+        }
+        for _, child in ipairs(frame:GetChildren()) do
+            if child:IsA("GuiObject") and child ~= frame then
+                pcall(function()
+                    local childTween = TweenService:Create(child, tweenInfo, {
+                        BackgroundTransparency = 1,
+                        TextTransparency = 1,
+                        ImageTransparency = 1
+                    })
+                    childTween:Play()
+                end)
+            end
+        end
+        if fovCircle then
+            pcall(function()
+                fovCircle.ImageTransparency = 1
+                fovCircle.Visible = false
+            end)
+        end
+    end
+    
+    guiTween = TweenService:Create(frame, tweenInfo, targetProperties)
+    guiTween:Play()
+end
+
+-- Бинд на J
+UserInputService.InputBegan:Connect(function(input, isTyping)
+    if isTyping then return end
+    if input.KeyCode == Config.GuiToggleKey then
+        DebugPrint("J key pressed")
+        ToggleGUI()
+    end
+end)
+
+-- =====================================================================
+-- [10] ИСПРАВЛЕННОЕ СОЗДАНИЕ GUI (ПОЛНАЯ ПЕРЕРАБОТКА)
+-- =====================================================================
+local function CreateCircleImage()
+    return "188508485"
+end
+
+function SetupGUI()
+    DebugPrint("SetupGUI started...")
+    
+    -- Удаляем старый GUI
+    if mainGui then 
+        pcall(function() mainGui:Destroy() end)
+        mainGui = nil
+    end
+    
+    -- Пробуем разные родители
+    local parentGui = nil
+    
+    -- 1. Пробуем PlayerGui
+    pcall(function()
+        if LocalPlayer and LocalPlayer:FindFirstChild("PlayerGui") then
+            parentGui = LocalPlayer.PlayerGui
+        end
+    end)
+    
+    -- 2. Если не работает, пробуем CoreGui
+    if not parentGui then
+        pcall(function()
+            local coreGui = game:GetService("CoreGui")
+            if coreGui then
+                parentGui = coreGui
+                DebugPrint("Using CoreGui instead of PlayerGui")
+            end
+        end)
+    end
+    
+    -- 3. Если ничего не работает, создаём свой ScreenGui через InsertService
+    if not parentGui then
+        pcall(function()
+            local insertService = game:GetService("InsertService")
+            local newGui = Instance.new("ScreenGui")
+            newGui.Name = "KusmanGUI_Fallback"
+            newGui.ResetOnSpawn = false
+            newGui.Parent = LocalPlayer:WaitForChild("PlayerGui", 0.5) or game:GetService("CoreGui")
+            parentGui = newGui.Parent
+        end)
+    end
+    
+    if not parentGui then
+        DebugPrint("CRITICAL: No valid parent for GUI found!")
+        return
+    end
+    
+    DebugPrint("Parent GUI: " .. parentGui.Name)
+    
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "KusmanGUI_V1"
+    screenGui.ResetOnSpawn = false
+    screenGui.IgnoreGuiInset = true  -- Игнорируем отступы (важно для San Diego)
+    screenGui.Parent = parentGui
+    
+    if not screenGui.Parent then
+        DebugPrint("CRITICAL: Failed to parent ScreenGui!")
+        return
+    end
+    
+    -- === ГЛАВНЫЙ ФРЕЙМ ===
+    local frame = Instance.new("Frame")
+    frame.Name = "MainFrame"
+    frame.Size = UDim2.new(0, 340, 0, 460)
+    frame.Position = UDim2.new(0.5, -170, 0.5, -230)
+    frame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+    frame.BackgroundTransparency = 0.9  -- Изначально скрыт
+    frame.BorderSizePixel = 0
+    frame.ClipsDescendants = true
+    frame.Visible = true
+    frame.Parent = screenGui
+    
+    -- По умолчанию GUI скрыт (маленький и прозрачный)
+    guiVisible = false
+    frame.BackgroundTransparency = 0.9
+    frame.Size = UDim2.new(0, 50, 0, 50)
+    
+    -- Скругление
+    local corner = Instance.new("UICorner", frame)
+    corner.CornerRadius = UDim.new(0, 14)
+    
+    -- Обводка
+    local stroke = Instance.new("UIStroke", frame)
+    stroke.Color = Color3.fromRGB(70, 70, 100)
+    stroke.Thickness = 1.5
+    stroke.Transparency = 0.4
+    
+    -- === ЗАГОЛОВОК ===
+    local title = Instance.new("TextLabel", frame)
+    title.Name = "Title"
+    title.Size = UDim2.new(1, 0, 0, 35)
+    title.BackgroundTransparency = 1
+    title.Text = "  KUSMAN V1.3  |  SAN DIEGO"
+    title.TextColor3 = Color3.fromRGB(210, 210, 235)
+    title.TextScaled = true
+    title.Font = Enum.Font.GothamBold
+    title.TextXAlignment = Enum.TextXAlignment.Left
+    title.TextTransparency = 1
+    title.Visible = true
+    
+    -- === SPEED ===
+    local speedLabel = Instance.new("TextLabel", frame)
+    speedLabel.Size = UDim2.new(0.4, 0, 0, 22)
+    speedLabel.Position = UDim2.new(0.05, 0, 0.12, 0)
+    speedLabel.BackgroundTransparency = 1
+    speedLabel.Text = "Speed"
+    speedLabel.TextColor3 = Color3.fromRGB(180, 180, 210)
+    speedLabel.TextScaled = true
+    speedLabel.Font = Enum.Font.GothamMedium
+    speedLabel.TextXAlignment = Enum.TextXAlignment.Left
+    speedLabel.TextTransparency = 1
+    
+    local speedBox = Instance.new("TextBox", frame)
+    speedBox.Size = UDim2.new(0.35, 0, 0, 22)
+    speedBox.Position = UDim2.new(0.55, 0, 0.12, 0)
+    speedBox.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+    speedBox.BackgroundTransparency = 0.3
+    speedBox.Text = tostring(Config.Speed)
+    speedBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+    speedBox.TextScaled = true
+    speedBox.Font = Enum.Font.GothamMedium
+    speedBox.ClearTextOnFocus = false
+    speedBox.PlaceholderText = "50"
+    speedBox.TextTransparency = 1
+    local speedCorner = Instance.new("UICorner", speedBox)
+    speedCorner.CornerRadius = UDim.new(0, 6)
+    
+    speedBox:GetPropertyChangedSignal("Text"):Connect(function()
+        local val = tonumber(speedBox.Text)
+        if val and val > 0 then Config.Speed = val end
+    end)
+    
+    -- === FOV RADIUS ===
+    local fovLabel = Instance.new("TextLabel", frame)
+    fovLabel.Size = UDim2.new(0.4, 0, 0, 22)
+    fovLabel.Position = UDim2.new(0.05, 0, 0.24, 0)
+    fovLabel.BackgroundTransparency = 1
+    fovLabel.Text = "FOV Radius"
+    fovLabel.TextColor3 = Color3.fromRGB(180, 180, 210)
+    fovLabel.TextScaled = true
+    fovLabel.Font = Enum.Font.GothamMedium
+    fovLabel.TextXAlignment = Enum.TextXAlignment.Left
+    fovLabel.TextTransparency = 1
+    
+    local fovBox = Instance.new("TextBox", frame)
+    fovBox.Size = UDim2.new(0.35, 0, 0, 22)
+    fovBox.Position = UDim2.new(0.55, 0, 0.24, 0)
+    fovBox.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+    fovBox.BackgroundTransparency = 0.3
+    fovBox.Text = tostring(Config.AimFOV)
+    fovBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+    fovBox.TextScaled = true
+    fovBox.Font = Enum.Font.GothamMedium
+    fovBox.ClearTextOnFocus = false
+    fovBox.PlaceholderText = "150"
+    fovBox.TextTransparency = 1
+    local fovCorner = Instance.new("UICorner", fovBox)
+    fovCorner.CornerRadius = UDim.new(0, 6)
+    
+    fovBox:GetPropertyChangedSignal("Text"):Connect(function()
+        local val = tonumber(fovBox.Text)
+        if val and val > 0 then 
+            Config.AimFOV = val
+            if fovCircle then
+                fovCircle.Size = UDim2.new(0, Config.AimFOV * 2, 0, Config.AimFOV * 2)
+                fovCircle.Position = UDim2.new(0.5, -Config.AimFOV, 0.5, -Config.AimFOV)
+            end
+        end
+    end)
+    
+    -- === SPEED AIM ===
+    local speedAimLabel = Instance.new("TextLabel", frame)
+    speedAimLabel.Size = UDim2.new(0.4, 0, 0, 22)
+    speedAimLabel.Position = UDim2.new(0.05, 0, 0.36, 0)
+    speedAimLabel.BackgroundTransparency = 1
+    speedAimLabel.Text = "Aim Speed"
+    speedAimLabel.TextColor3 = Color3.fromRGB(180, 180, 210)
+    speedAimLabel.TextScaled = true
+    speedAimLabel.Font = Enum.Font.GothamMedium
+    speedAimLabel.TextXAlignment = Enum.TextXAlignment.Left
+    speedAimLabel.TextTransparency = 1
+    
+    local speedAimBox = Instance.new("TextBox", frame)
+    speedAimBox.Size = UDim2.new(0.35, 0, 0, 22)
+    speedAimBox.Position = UDim2.new(0.55, 0, 0.36, 0)
+    speedAimBox.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+    speedAimBox.BackgroundTransparency = 0.3
+    speedAimBox.Text = string.format("%.2f", Config.AimSpeed)
+    speedAimBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+    speedAimBox.TextScaled = true
+    speedAimBox.Font = Enum.Font.GothamMedium
+    speedAimBox.ClearTextOnFocus = false
+    speedAimBox.PlaceholderText = "0.30"
+    speedAimBox.TextTransparency = 1
+    local speedAimCorner = Instance.new("UICorner", speedAimBox)
+    speedAimCorner.CornerRadius = UDim.new(0, 6)
+    
+    speedAimBox:GetPropertyChangedSignal("Text"):Connect(function()
+        local val = tonumber(speedAimBox.Text)
+        if val and val >= 0 and val <= 1 then Config.AimSpeed = val end
+    end)
+    
+    -- === BONE SELECT ===
+    local boneLabel = Instance.new("TextLabel", frame)
+    boneLabel.Size = UDim2.new(0.4, 0, 0, 22)
+    boneLabel.Position = UDim2.new(0.05, 0, 0.48, 0)
+    boneLabel.BackgroundTransparency = 1
+    boneLabel.Text = "Aim Bone"
+    boneLabel.TextColor3 = Color3.fromRGB(180, 180, 210)
+    boneLabel.TextScaled = true
+    boneLabel.Font = Enum.Font.GothamMedium
+    boneLabel.TextXAlignment = Enum.TextXAlignment.Left
+    boneLabel.TextTransparency = 1
+    
+    local boneButton = Instance.new("TextButton", frame)
+    boneButton.Size = UDim2.new(0.35, 0, 0, 26)
+    boneButton.Position = UDim2.new(0.55, 0, 0.48, 0)
+    boneButton.BackgroundColor3 = Color3.fromRGB(60, 60, 85)
+    boneButton.BackgroundTransparency = 0.2
+    boneButton.Text = Config.AimPart
+    boneButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    boneButton.TextScaled = true
+    boneButton.Font = Enum.Font.GothamBold
+    boneButton.TextTransparency = 1
+    local boneCorner = Instance.new("UICorner", boneButton)
+    boneCorner.CornerRadius = UDim.new(0, 8)
+    
+    boneButton.MouseButton1Click:Connect(function()
+        if Config.AimPart == "Head" then
+            Config.AimPart = "HumanoidRootPart"
+        else
+            Config.AimPart = "Head"
+        end
+        boneButton.Text = Config.AimPart
+    end)
+    
+    -- === TEAM CHECK ===
+    local teamLabel = Instance.new("TextLabel", frame)
+    teamLabel.Size = UDim2.new(0.4, 0, 0, 22)
+    teamLabel.Position = UDim2.new(0.05, 0, 0.60, 0)
+    teamLabel.BackgroundTransparency = 1
+    teamLabel.Text = "Team Check"
+    teamLabel.TextColor3 = Color3.fromRGB(180, 180, 210)
+    teamLabel.TextScaled = true
+    teamLabel.Font = Enum.Font.GothamMedium
+    teamLabel.TextXAlignment = Enum.TextXAlignment.Left
+    teamLabel.TextTransparency = 1
+    
+    local teamButton = Instance.new("TextButton", frame)
+    teamButton.Size = UDim2.new(0.25, 0, 0, 26)
+    teamButton.Position = UDim2.new(0.65, 0, 0.60, 0)
+    teamButton.BackgroundColor3 = Config.TeamCheck and Color3.fromRGB(0, 180, 80) or Color3.fromRGB(180, 40, 40)
+    teamButton.BackgroundTransparency = 0.2
+    teamButton.Text = Config.TeamCheck and "ON" or "OFF"
+    teamButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    teamButton.TextScaled = true
+    teamButton.Font = Enum.Font.GothamBold
+    teamButton.TextTransparency = 1
+    local teamCorner = Instance.new("UICorner", teamButton)
+    teamCorner.CornerRadius = UDim.new(0, 8)
+    
+    teamButton.MouseButton1Click:Connect(function()
+        Config.TeamCheck = not Config.TeamCheck
+        teamButton.Text = Config.TeamCheck and "ON" or "OFF"
+        teamButton.BackgroundColor3 = Config.TeamCheck and Color3.fromRGB(0, 180, 80) or Color3.fromRGB(180, 40, 40)
+    end)
+    
+    -- === BIND KEY ===
+    local bindLabel = Instance.new("TextLabel", frame)
+    bindLabel.Size = UDim2.new(0.4, 0, 0, 22)
+    bindLabel.Position = UDim2.new(0.05, 0, 0.72, 0)
+    bindLabel.BackgroundTransparency = 1
+    bindLabel.Text = "Aim Bind"
+    bindLabel.TextColor3 = Color3.fromRGB(180, 180, 210)
+    bindLabel.TextScaled = true
+    bindLabel.Font = Enum.Font.GothamMedium
+    bindLabel.TextXAlignment = Enum.TextXAlignment.Left
+    bindLabel.TextTransparency = 1
+    
+    local bindButton = Instance.new("TextButton", frame)
+    bindButton.Size = UDim2.new(0.35, 0, 0, 26)
+    bindButton.Position = UDim2.new(0.55, 0, 0.72, 0)
+    bindButton.BackgroundColor3 = Color3.fromRGB(60, 60, 85)
+    bindButton.BackgroundTransparency = 0.2
+    bindButton.Text = tostring(Config.BindKey):gsub("Enum.KeyCode.", "")
+    bindButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    bindButton.TextScaled = true
+    bindButton.Font = Enum.Font.GothamBold
+    bindButton.TextTransparency = 1
+    local bindCorner = Instance.new("UICorner", bindButton)
+    bindCorner.CornerRadius = UDim.new(0, 8)
+    
+    bindButton.MouseButton1Click:Connect(function()
+        bindButton.Text = "PRESS KEY..."
+        local conn
+        conn = UserInputService.InputBegan:Connect(function(input, isTyping)
+            if isTyping then return end
+            if input.KeyCode ~= Enum.KeyCode.Unknown then
+                Config.BindKey = input.KeyCode
+                bindButton.Text = tostring(Config.BindKey):gsub("Enum.KeyCode.", "")
+                conn:Disconnect()
+            end
+        end)
+    end)
+    
+    -- === ВЕРСИЯ ===
+    local versionLabel = Instance.new("TextLabel", frame)
+    versionLabel.Size = UDim2.new(1, 0, 0, 20)
+    versionLabel.Position = UDim2.new(0, 0, 0.94, 0)
+    versionLabel.BackgroundTransparency = 1
+    versionLabel.Text = "KUSMAN V1.3 | Toggle J | FIXED"
+    versionLabel.TextColor3 = Color3.fromRGB(120, 120, 160)
+    versionLabel.TextScaled = true
+    versionLabel.Font = Enum.Font.GothamLight
+    versionLabel.TextXAlignment = Enum.TextXAlignment.Center
+    versionLabel.TextTransparency = 1
+    
+    -- === FOV ОКРУЖНОСТЬ ===
+    fovCircle = Instance.new("ImageLabel", screenGui)
+    fovCircle.Size = UDim2.new(0, Config.AimFOV * 2, 0, Config.AimFOV * 2)
+    fovCircle.Position = UDim2.new(0.5, -Config.AimFOV, 0.5, -Config.AimFOV)
+    fovCircle.BackgroundTransparency = 1
+    fovCircle.Image = "rbxassetid://" .. CreateCircleImage()
+    fovCircle.ImageTransparency = 1  -- скрыт
+    fovCircle.ZIndex = 999
+    fovCircle.Visible = false
+    fovCircle.Parent = screenGui
+    
+    -- === ПЕРЕТАСКИВАНИЕ ===
+    local dragging = false
+    local dragStart = nil
+    local startPos = nil
+    
+    title.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+    
+    title.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement and dragging then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, 
+                                        startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+    
+    mainGui = screenGui
+    DebugPrint("GUI created successfully! Parent: " .. tostring(screenGui.Parent.Name))
+    DebugPrint("MainFrame: " .. tostring(frame.Name))
+    DebugPrint("Press J to toggle visibility!")
+end
+
+-- =====================================================================
+-- [11] ЗАПУСК GUI С ЗАЩИТОЙ ОТ ОШИБОК
+-- =====================================================================
+local success, err = pcall(SetupGUI)
+if success then
+    DebugPrint("SetupGUI executed successfully!")
+else
+    DebugPrint("SetupGUI ERROR: " .. tostring(err))
+    -- Пробуем альтернативный вариант без pcall для отладки
+    DebugPrint("Trying fallback setup...")
+    SetupGUI()
+end
+
+-- =====================================================================
+-- [12] ЗАПУСК RENDER STEP
+-- =====================================================================
+RunService.RenderStepped:Connect(SilentAimStep)
+DebugPrint("Silent Aim loop started.")
+
+-- =====================================================================
+-- [13] ЗАЩИТА ОТ ОШИБОК
+-- =====================================================================
+local function safeCall(func, ...)
+    local success, err = pcall(func, ...)
+    if not success then
+        warn("[KUSMAN ERROR]: " .. tostring(err))
+    end
+    return success
+end
+
+local origGetTarget = GetTarget
+GetTarget = function(...) return safeCall(origGetTarget, ...) end
+
+local origSilent = SilentAimStep
+SilentAimStep = function(...) return safeCall(origSilent, ...) end
+
+DebugPrint("[KUSMAN_V1.3] FULL CODE LOADED.")
+DebugPrint("Press J to toggle GUI. Press Q for Speed CFrame.")
+DebugPrint("Hold " .. tostring(Config.BindKey):gsub("Enum.KeyCode.", "") .. " for Silent Aim.")
+-- =====================================================================
+-- КОНЕЦ СКРИПТА
+-- =====================================================================
