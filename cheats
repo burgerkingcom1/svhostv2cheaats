@@ -1,10 +1,3 @@
--- =====================================================================
--- KUSMAN_V1 :: SAN DIEGO CHEAT ENGINE - FIXED VERSION 1.3
--- ИСПРАВЛЕНИЯ: гарантированное отображение GUI, 
---              работа во всех экзекьюторах, отладка
--- =====================================================================
-
--- [1] ГЛОБАЛЬНЫЕ СЕРВИСЫ И ПЕРЕМЕННЫЕ
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -22,7 +15,7 @@ local Config = {
     SilentAimEnabled = true,
     BindKey = Enum.KeyCode.MouseButton2,
     TeamCheck = true,
-    GuiToggleKey = Enum.KeyCode.J,
+    GuiToggleKey = Enum.KeyCode.J,  -- Клавиша для открытия/закрытия GUI
 }
 
 -- [3] СОСТОЯНИЯ
@@ -30,20 +23,11 @@ local aimTarget = nil
 local isAiming = false
 local fovCircle = nil
 local mainGui = nil
-local guiVisible = false
-local guiTween = nil
+local guiVisible = false  -- текущее состояние видимости GUI
+local guiTween = nil      -- для отслеживания активной анимации
 
 -- =====================================================================
--- [4] ОТЛАДОЧНАЯ СИСТЕМА (вывод в консоль экзекьютора)
--- =====================================================================
-local function DebugPrint(msg)
-    print("[KUSMAN DEBUG] " .. tostring(msg))
-end
-
-DebugPrint("Script started...")
-
--- =====================================================================
--- [5] СКОРОСТНОЙ CFrame
+-- МОДУЛЬ 1: СКОРОСТНОЙ CFrame
 -- =====================================================================
 local function SpeedCFrame()
     local char = LocalPlayer.Character
@@ -60,7 +44,7 @@ local function SpeedCFrame()
 end
 
 -- =====================================================================
--- [6] ПОИСК ЦЕЛИ
+-- МОДУЛЬ 2: ПОИСК ЦЕЛИ
 -- =====================================================================
 local function GetTarget()
     local char = LocalPlayer.Character
@@ -109,7 +93,7 @@ local function GetTarget()
 end
 
 -- =====================================================================
--- [7] SILENT AIM
+-- МОДУЛЬ 3: SILENT AIM
 -- =====================================================================
 local function SilentAimStep()
     if not Config.SilentAimEnabled then return end
@@ -134,7 +118,7 @@ local function SilentAimStep()
 end
 
 -- =====================================================================
--- [8] БИНДЫ КНОПОК
+-- МОДУЛЬ 4: БИНДЫ КНОПОК (AIM + SPEED)
 -- =====================================================================
 UserInputService.InputBegan:Connect(function(input, isTyping)
     if isTyping then return end
@@ -159,186 +143,129 @@ UserInputService.InputBegan:Connect(function(input, isTyping)
 end)
 
 -- =====================================================================
--- [9] TOGGLE GUI С АНИМАЦИЕЙ (ИСПРАВЛЕНО)
+-- МОДУЛЬ 5: TOGGLE GUI ПО КЛАВИШЕ J С АНИМАЦИЕЙ
 -- =====================================================================
 local function ToggleGUI()
-    DebugPrint("ToggleGUI called")
+    if not mainGui then return end
     
-    if not mainGui then
-        DebugPrint("mainGui is nil! Attempting to recreate...")
-        SetupGUI()
-        if not mainGui then
-            DebugPrint("Failed to create GUI!")
-            return
-        end
-    end
-    
+    -- Находим основной фрейм внутри GUI
     local frame = mainGui:FindFirstChild("MainFrame")
-    if not frame then
-        DebugPrint("MainFrame not found in mainGui!")
-        return
-    end
+    if not frame then return end
     
+    -- Отменяем предыдущую анимацию, если она ещё идёт
     if guiTween and guiTween.PlaybackState == Enum.PlaybackState.Playing then
         guiTween:Cancel()
     end
     
+    -- Переключаем состояние
     guiVisible = not guiVisible
-    DebugPrint("GUI visible: " .. tostring(guiVisible))
     
+    -- Целевые параметры анимации
     local targetProperties = {}
-    local tweenInfo = TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local tweenInfo = TweenInfo.new(
+        0.35,                              -- длительность в секундах
+        Enum.EasingStyle.Quad,             -- стиль плавности
+        Enum.EasingDirection.Out,          -- направление
+        0,                                 -- повторений
+        false,                             -- реверс
+        0                                  -- задержка
+    )
     
     if guiVisible then
+        -- Анимация открытия: масштаб от 0.5 к 1.0 + прозрачность от 0.4 к 1.0
         targetProperties = {
             BackgroundTransparency = 0.12,
             Size = UDim2.new(0, 340, 0, 460)
         }
+        -- Также анимируем все дочерние элементы (для эффекта "выезда")
         for _, child in ipairs(frame:GetChildren()) do
             if child:IsA("GuiObject") and child ~= frame then
-                pcall(function()
-                    local childTween = TweenService:Create(child, tweenInfo, {
-                        BackgroundTransparency = 0,
-                        TextTransparency = 0,
-                        ImageTransparency = 0
-                    })
-                    childTween:Play()
-                end)
+                local childTween = TweenService:Create(child, tweenInfo, {
+                    BackgroundTransparency = child.BackgroundTransparency > 0.5 and child.BackgroundTransparency or 0,
+                    Position = child.Position + UDim2.new(0, 0, 0, 0) -- сброс
+                })
+                childTween:Play()
             end
         end
-        if fovCircle then
-            pcall(function()
-                fovCircle.ImageTransparency = 0.55
-                fovCircle.Visible = true
-            end)
-        end
     else
+        -- Анимация закрытия: сжатие к центру + исчезновение
         targetProperties = {
             BackgroundTransparency = 0.9,
             Size = UDim2.new(0, 50, 0, 50)
         }
+        -- Дочерние элементы делаем прозрачными
         for _, child in ipairs(frame:GetChildren()) do
             if child:IsA("GuiObject") and child ~= frame then
-                pcall(function()
-                    local childTween = TweenService:Create(child, tweenInfo, {
-                        BackgroundTransparency = 1,
-                        TextTransparency = 1,
-                        ImageTransparency = 1
-                    })
-                    childTween:Play()
-                end)
+                local childTween = TweenService:Create(child, tweenInfo, {
+                    BackgroundTransparency = 1,
+                    TextTransparency = 1,
+                    ImageTransparency = 1
+                })
+                childTween:Play()
             end
-        end
-        if fovCircle then
-            pcall(function()
-                fovCircle.ImageTransparency = 1
-                fovCircle.Visible = false
-            end)
         end
     end
     
+    -- Анимируем сам фрейм
     guiTween = TweenService:Create(frame, tweenInfo, targetProperties)
     guiTween:Play()
+    
+    -- Дополнительно: показываем/скрываем FOV круг вместе с GUI
+    if fovCircle then
+        local fovTween = TweenService:Create(fovCircle, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+            ImageTransparency = guiVisible and 0.55 or 1
+        })
+        fovTween:Play()
+    end
 end
 
--- Бинд на J
+-- Биндим на клавишу J
 UserInputService.InputBegan:Connect(function(input, isTyping)
     if isTyping then return end
     if input.KeyCode == Config.GuiToggleKey then
-        DebugPrint("J key pressed")
         ToggleGUI()
     end
 end)
 
 -- =====================================================================
--- [10] ИСПРАВЛЕННОЕ СОЗДАНИЕ GUI (ПОЛНАЯ ПЕРЕРАБОТКА)
+-- МОДУЛЬ 6: СОЗДАНИЕ GUI (С ИЗМЕНЕННОЙ СТРУКТУРОЙ)
 -- =====================================================================
 local function CreateCircleImage()
     return "188508485"
 end
 
-function SetupGUI()
-    DebugPrint("SetupGUI started...")
-    
+local function SetupGUI()
     -- Удаляем старый GUI
     if mainGui then 
-        pcall(function() mainGui:Destroy() end)
+        mainGui:Destroy() 
         mainGui = nil
     end
-    
-    -- Пробуем разные родители
-    local parentGui = nil
-    
-    -- 1. Пробуем PlayerGui
-    pcall(function()
-        if LocalPlayer and LocalPlayer:FindFirstChild("PlayerGui") then
-            parentGui = LocalPlayer.PlayerGui
-        end
-    end)
-    
-    -- 2. Если не работает, пробуем CoreGui
-    if not parentGui then
-        pcall(function()
-            local coreGui = game:GetService("CoreGui")
-            if coreGui then
-                parentGui = coreGui
-                DebugPrint("Using CoreGui instead of PlayerGui")
-            end
-        end)
-    end
-    
-    -- 3. Если ничего не работает, создаём свой ScreenGui через InsertService
-    if not parentGui then
-        pcall(function()
-            local insertService = game:GetService("InsertService")
-            local newGui = Instance.new("ScreenGui")
-            newGui.Name = "KusmanGUI_Fallback"
-            newGui.ResetOnSpawn = false
-            newGui.Parent = LocalPlayer:WaitForChild("PlayerGui", 0.5) or game:GetService("CoreGui")
-            parentGui = newGui.Parent
-        end)
-    end
-    
-    if not parentGui then
-        DebugPrint("CRITICAL: No valid parent for GUI found!")
-        return
-    end
-    
-    DebugPrint("Parent GUI: " .. parentGui.Name)
     
     local screenGui = Instance.new("ScreenGui")
     screenGui.Name = "KusmanGUI_V1"
     screenGui.ResetOnSpawn = false
-    screenGui.IgnoreGuiInset = true  -- Игнорируем отступы (важно для San Diego)
-    screenGui.Parent = parentGui
+    screenGui.Parent = LocalPlayer.PlayerGui
     
-    if not screenGui.Parent then
-        DebugPrint("CRITICAL: Failed to parent ScreenGui!")
-        return
-    end
-    
-    -- === ГЛАВНЫЙ ФРЕЙМ ===
+    -- === ГЛАВНЫЙ ФРЕЙМ (с именем для поиска) ===
     local frame = Instance.new("Frame")
     frame.Name = "MainFrame"
     frame.Size = UDim2.new(0, 340, 0, 460)
     frame.Position = UDim2.new(0.5, -170, 0.5, -230)
     frame.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
-    frame.BackgroundTransparency = 0.9  -- Изначально скрыт
+    frame.BackgroundTransparency = 0.12
     frame.BorderSizePixel = 0
     frame.ClipsDescendants = true
-    frame.Visible = true
     frame.Parent = screenGui
     
-    -- По умолчанию GUI скрыт (маленький и прозрачный)
+    -- По умолчанию GUI скрыт (при первом запуске)
     guiVisible = false
     frame.BackgroundTransparency = 0.9
     frame.Size = UDim2.new(0, 50, 0, 50)
     
-    -- Скругление
+    -- Скругление и обводка
     local corner = Instance.new("UICorner", frame)
     corner.CornerRadius = UDim.new(0, 14)
     
-    -- Обводка
     local stroke = Instance.new("UIStroke", frame)
     stroke.Color = Color3.fromRGB(70, 70, 100)
     stroke.Thickness = 1.5
@@ -349,15 +276,14 @@ function SetupGUI()
     title.Name = "Title"
     title.Size = UDim2.new(1, 0, 0, 35)
     title.BackgroundTransparency = 1
-    title.Text = "  KUSMAN V1.3  |  SAN DIEGO"
+    title.Text = "  KUSMAN V1  |  SAN DIEGO"
     title.TextColor3 = Color3.fromRGB(210, 210, 235)
     title.TextScaled = true
     title.Font = Enum.Font.GothamBold
     title.TextXAlignment = Enum.TextXAlignment.Left
-    title.TextTransparency = 1
-    title.Visible = true
+    title.TextTransparency = 1  -- скрыт по умолчанию
     
-    -- === SPEED ===
+    -- === SPEED SLIDER ===
     local speedLabel = Instance.new("TextLabel", frame)
     speedLabel.Size = UDim2.new(0.4, 0, 0, 22)
     speedLabel.Position = UDim2.new(0.05, 0, 0.12, 0)
@@ -389,7 +315,7 @@ function SetupGUI()
         if val and val > 0 then Config.Speed = val end
     end)
     
-    -- === FOV RADIUS ===
+    -- === FOV SLIDER ===
     local fovLabel = Instance.new("TextLabel", frame)
     fovLabel.Size = UDim2.new(0.4, 0, 0, 22)
     fovLabel.Position = UDim2.new(0.05, 0, 0.24, 0)
@@ -567,25 +493,24 @@ function SetupGUI()
     versionLabel.Size = UDim2.new(1, 0, 0, 20)
     versionLabel.Position = UDim2.new(0, 0, 0.94, 0)
     versionLabel.BackgroundTransparency = 1
-    versionLabel.Text = "KUSMAN V1.3 | Toggle J | FIXED"
+    versionLabel.Text = "KUSMAN V1.1 | Toggle J | Silent Aim"
     versionLabel.TextColor3 = Color3.fromRGB(120, 120, 160)
     versionLabel.TextScaled = true
     versionLabel.Font = Enum.Font.GothamLight
     versionLabel.TextXAlignment = Enum.TextXAlignment.Center
     versionLabel.TextTransparency = 1
     
-    -- === FOV ОКРУЖНОСТЬ ===
+    -- === FOV ОКРУЖНОСТЬ (всегда существует, но скрыта по умолчанию) ===
     fovCircle = Instance.new("ImageLabel", screenGui)
     fovCircle.Size = UDim2.new(0, Config.AimFOV * 2, 0, Config.AimFOV * 2)
     fovCircle.Position = UDim2.new(0.5, -Config.AimFOV, 0.5, -Config.AimFOV)
     fovCircle.BackgroundTransparency = 1
     fovCircle.Image = "rbxassetid://" .. CreateCircleImage()
-    fovCircle.ImageTransparency = 1  -- скрыт
+    fovCircle.ImageTransparency = 1  -- скрыт по умолчанию
     fovCircle.ZIndex = 999
-    fovCircle.Visible = false
     fovCircle.Parent = screenGui
     
-    -- === ПЕРЕТАСКИВАНИЕ ===
+    -- === ПЕРЕТАСКИВАНИЕ ОКНА ===
     local dragging = false
     local dragStart = nil
     local startPos = nil
@@ -612,32 +537,18 @@ function SetupGUI()
     end)
     
     mainGui = screenGui
-    DebugPrint("GUI created successfully! Parent: " .. tostring(screenGui.Parent.Name))
-    DebugPrint("MainFrame: " .. tostring(frame.Name))
-    DebugPrint("Press J to toggle visibility!")
 end
 
 -- =====================================================================
--- [11] ЗАПУСК GUI С ЗАЩИТОЙ ОТ ОШИБОК
+-- МОДУЛЬ 7: ЗАПУСК
 -- =====================================================================
-local success, err = pcall(SetupGUI)
-if success then
-    DebugPrint("SetupGUI executed successfully!")
-else
-    DebugPrint("SetupGUI ERROR: " .. tostring(err))
-    -- Пробуем альтернативный вариант без pcall для отладки
-    DebugPrint("Trying fallback setup...")
-    SetupGUI()
-end
+pcall(SetupGUI)
 
--- =====================================================================
--- [12] ЗАПУСК RENDER STEP
--- =====================================================================
+-- Запускаем RenderStep для Silent Aim
 RunService.RenderStepped:Connect(SilentAimStep)
-DebugPrint("Silent Aim loop started.")
 
 -- =====================================================================
--- [13] ЗАЩИТА ОТ ОШИБОК
+-- МОДУЛЬ 8: ЗАЩИТА ОТ ОШИБОК
 -- =====================================================================
 local function safeCall(func, ...)
     local success, err = pcall(func, ...)
@@ -653,9 +564,7 @@ GetTarget = function(...) return safeCall(origGetTarget, ...) end
 local origSilent = SilentAimStep
 SilentAimStep = function(...) return safeCall(origSilent, ...) end
 
-DebugPrint("[KUSMAN_V1.3] FULL CODE LOADED.")
-DebugPrint("Press J to toggle GUI. Press Q for Speed CFrame.")
-DebugPrint("Hold " .. tostring(Config.BindKey):gsub("Enum.KeyCode.", "") .. " for Silent Aim.")
+print("[KUSMAN_V1.1] FULL CODE LOADED. Press J to toggle GUI. All systems operational.")
 -- =====================================================================
 -- КОНЕЦ СКРИПТА
 -- =====================================================================
